@@ -1,8 +1,38 @@
 ---
 title: "PCI AAV8 TU qualification"
 author: "Joseph Oddy"
-format: html
-editor: visual
+date: "02-April-2025"
+lightbox: auto
+format:
+  html:
+    echo: false
+    warning: false
+    theme: flatly
+    mermaid:
+      theme: neutral
+    page-layout: article
+    self-contained: true
+    code-line-numbers: true
+    code-block-bg: true
+    code-block-border-left: "#30BBF0"
+    code-copy: true
+    code-link: true
+    code-fold: true
+    code-tools:
+      source: true
+      toggle: false
+      caption: none
+    fig-align: center
+    fig-height: 5
+    fig-width: 8
+    fig-responsive: true
+    fig-dpi: 150
+    fig-cap-location: top
+    number-depth: 2
+    toc: true
+    toc-depth: 3
+    smooth-scroll: true
+    embed-resources: true
 ---
 
 ```{r}
@@ -26,16 +56,16 @@ knitr::opts_chunk$set(
 ```
 
 
-# Touchlight iUK AAV9 TU Assay Qualification
+# PCI AAV8 TU Assay Qualification
 
-This repo contains the qualification analysis for the Touchlight iUK AAV9 TU assay. The assay quantifies infectivity of AAV9 on *HeLaRC32* cells. Reporter gene expression is measured using flow cytometry (as %GFP+ cells) and used to calculate TU/mL.
+This repo contains the qualification analysis for the PCI AAV8 TU assay. The assay quantifies infectivity of AAV8 on *HeLaRC32* cells. Reporter gene expression is measured using flow cytometry (as %GFP+ cells) and used to calculate TU/mL.
 
 ## Setup:
 
 -   2 runs, 2 plates per run
 -   Each run has:
-    -   **5X Dilution series AAV9** Sample
-    -   **1.6X Dilution series AAV9** Sample
+    -   **5X Dilution series AAV8** Sample
+    -   **1.6X Dilution series AAV8** Sample
     -   **5X Dilution series AAV2 Internal Control** Sample (1.3e+7 - 6.03e+7 expected range based on 50-200% average TU/mL taken across 11 separate measurements)
 -   Controls:
     -   **GFP+ / L/D+** Prepared from cells transduced w/ AAV2 Internal Control dilution 1 sample
@@ -45,7 +75,7 @@ This repo contains the qualification analysis for the Touchlight iUK AAV9 TU ass
 
 #### Note:
 
-Run 1 Operator 2 was excluded from the analysis due to a technical issue with the flow cytometer. This plate was subsequently repeated and labelled as Run 3 Operator 2.
+Run was excluded as a term for the adjusted R2 analysis, as it was invariable across samples.
 
 ## Analysis:
 
@@ -58,7 +88,7 @@ Run 1 Operator 2 was excluded from the analysis due to a technical issue with th
     -   **Repeatability:** CV \< 40% between dilution series of a single plate (n=4)
     -   **Intermediate Precision:** CV \< 50% between same dilutions across all plates (n=4, 1/plate). Data obtained by taking each plate's average TU/mL from the separate dilution series.
 -   **Specificity:** Using negative controls only, \< 3% GFP+.
--   **Linearity:** R^2^ \> 0.9 for AAV9 dilution series. Using 1.6X dilution series.
+-   **Linearity:** R^2^ \> 0.9 for AAV8 dilution series. Using 1.6X dilution series.
 -   **LoD:** Lowest dilutional TU/mL where %GFP+ \> average negative control GFP+ + 3.3\*sd(negative control GFP+)
 -   **LoQ:** Lowest dilutional TU/mL where %GFP+ \> average negative control GFP+ + 10\*sd(negative control GFP+) and meets precision CV% criteria.
 -   **Robustness:** N/A
@@ -79,8 +109,9 @@ tu_data <- read_excel("data/EX2350, 2351, 2352, 2388 - TU AAV8 Quali Data Collat
     across(LiveCellsPerc:GFPpercent, ~ .x/100)
   ) |> 
   select(!c(`...13`, `...15`, `Operator 1:`, `Omaymah Belhaj-Fahsi`)) |> 
-  filter(!if_all(everything(), is.na))
-
+  filter(!if_all(everything(), is.na)) |> 
+  filter(LiveCells > 1000) |> 
+  filter(LiveCellsPerc > 0.7)
 ```
 
 
@@ -93,7 +124,7 @@ Graph below (@fig-specificity-samples) shows the %GFP+ cells identified across a
 ```{r}
 #| label: fig-specificity-samples
 #| dev: "ragg_png"
-#| fig-cap: "AAV9 TU assay negative controls."
+#| fig-cap: "AAV8 TU assay negative controls."
 
 tu_data |>
   filter(str_detect(Sample, "^GFP")) |>
@@ -158,7 +189,7 @@ LL_data[2, ] |> # plan says use blanks for all tho so f it we're not using the d
 
 ```
 
-The LLoQ is about where it was estimated beforehand, at 2.0% (close to 3% estimate). The noise floor and LoD/LLoQ is estimated using the GFP- L/D+ samples and their associated variance.
+The LLoQ is at 1.1%. The noise floor and LoD/LLoQ is estimated using the GFP- L/D+ samples and their associated variance.
  
 
 ## Linearity
@@ -189,8 +220,6 @@ tu_data |>
   )
 
 ```
-
-Potential linear range is between 1:100 - 1:1049 but let's check.
 
 
 ```{r}
@@ -279,7 +308,7 @@ tu_data |>
   autofit()
 ```
 
-1:100 - 1:2684 dilution range passes the acceptance criteria.
+1:16 - 1:168 dilution range passes the acceptance criteria.
 
 
 ```{r}
@@ -312,16 +341,16 @@ WR_data |>
   
 ```
 
-1:100 - 1:2684 corresponds to an average GFP+% of between 3.1% (±0.3) - 35.5% (±1.3) for the linear working range.
+1:16 - 1:168 corresponds to an average GFP+% of between 5.1% (±0.1) - 33.6% (±1.2) for the linear working range.
 
 ## Precision
 
-We'll highlight the linear working range in the plots (3.1% - 35.5%).
+We'll highlight the linear working range in the plots (5.1% - 33.6%).
 
 ```{r}
-#| label: fig-precision-aav9
+#| label: fig-precision-AAV8
 #| dev: "ragg_png"
-#| fig-cap: "AAV8 TU assay repeatability. CVs in large yellow font, average GFP+ cells% above in white. Red highlights the 3.1-35.5% GFP+ cells samples (working range)."
+#| fig-cap: "AAV8 TU assay repeatability. CVs in large yellow font, average GFP+ cells% above in white."
 
 # Run 2 operator 1 getting NAs
 
@@ -333,7 +362,7 @@ tu_data |>
   summarise(
     CV = DescTools::CoefVar(TU_ml_adj),
     GFP = mean(GFPpercent)
-  ) #|>
+  ) |>
   ggplot(
     aes(x = Dilution, y = paste0("Run ", Run, " Op ", Operator), fill = CV)
   ) + 
@@ -351,7 +380,7 @@ tu_data |>
 
 ```
 
-1:625 is the only sample that was consistently within the presumed working range of the assay. 
+1:25 and 1:125 are the dilutions that are consistently within the presumed working range of the assay. 
 
 ```{r}
 #| label: tbl-intermediate-precision
@@ -379,7 +408,7 @@ tu_data |>
 
 ```
 
-The only sample within working range completely had a 15.8% CV across the 4 plates. Most other samples except the 1:15625 one had acceptable CV as well.
+The only samples within working range completely had CVs of 25% (1:25) and 15.1% (1:125) CVs across the 4 plates.
 
 #### Control sample
 
@@ -415,7 +444,7 @@ tu_data |>
 
 ```
 
-The 3.1 - 35.5% GFP+ range is consistent between the 1:25-1:125 dilutions across the 4 plates.
+The 5.1% - 33.6% GFP+ range is consistent for the 1:125 dilution across the 4 plates.
 
 #### Linearity sample
 
@@ -457,12 +486,12 @@ tu_data |>
 # Conclusions
 
 -   **Precision**
-    -   **Repeatability:** 3.4% - 13.5% CV for the samples within linear working range, although all dilutions pass the <40% CV criteria (1.1% - 29.2% CV).
-    -   **Intermediate Precision:** 15.8% CV for the 1:625 sample (10.1% - 14.4% GFP+ range), although all dilutions pass the <50% CV criteria (6.2% - 44.9% CV).
--   **Specificity:** Noise floor at 0.7% (±0.1) GFP+, with strong positive signal in the positive controls.
--   **Linearity:** 1:100 - 1:2684 (3.1% - 35.5% GFP+) 
--   **LoD:** 1.1% GFP+ cells
--   **LLoQ:** 2.0% GFP+ cells
--   **ULoQ:** 35.5% GFP+ cells
+    -   **Repeatability:** All dilutions pass the <40% CV criteria.
+    -   **Intermediate Precision:** 25% CV for the 1:25 sample and 15.1% CV for 1:125 sample, although all dilutions pass the <50% CV criteria.
+-   **Specificity:** Noise floor at 0.4% (±0.1) GFP+, with strong positive signal in the positive controls.
+-   **Linearity:** 1:16 - 1:168 (5.1% (±0.1) - 33.6% (±1.2) GFP+)
+-   **LoD:** 0.6% GFP+ cells
+-   **LLoQ:** 1.1% GFP+ cells
+-   **ULoQ:** 33.6% GFP+ cells
 
-Assay passes qualification with a working linear range between 3.1% - 35.5% GFP+ cells, LLoQ of 2% GFP+ cells, LoD of 1.1% GFP+ cells, 3.3% - 13.5% CV repeatability and 15.8% intermediate precision within the working range.
+Assay passes qualification with a working linear range between 5.1% - 33.6% GFP+ cells, LLoQ of 1.1% GFP+ cells, LoD of 0.6% GFP+ cells, <40% CV repeatability and 15.1% (1:125) and 25% (1:25) intermediate precision within the working range.
