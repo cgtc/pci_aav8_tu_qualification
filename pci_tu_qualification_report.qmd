@@ -1,0 +1,468 @@
+---
+title: "PCI AAV8 TU qualification"
+author: "Joseph Oddy"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: setup
+
+library(tidyverse)
+library(readxl)
+library(aqua)
+library(flextable)
+
+knitr::knit_hooks$set(
+  pngquant = knitr::hook_pngquant,
+  optipng = knitr::hook_optipng
+)
+knitr::opts_chunk$set(
+  dev = "ragg_png",
+  pngquant = "--speed=1 --quality=100 --skip-if-larger --strip --force",
+  optipng = "-zc9 -zm8-9 -zs0-1 -f0,5 -clobber -fix -force"
+)
+
+```
+
+
+# Touchlight iUK AAV9 TU Assay Qualification
+
+This repo contains the qualification analysis for the Touchlight iUK AAV9 TU assay. The assay quantifies infectivity of AAV9 on *HeLaRC32* cells. Reporter gene expression is measured using flow cytometry (as %GFP+ cells) and used to calculate TU/mL.
+
+## Setup:
+
+-   2 runs, 2 plates per run
+-   Each run has:
+    -   **5X Dilution series AAV9** Sample
+    -   **1.6X Dilution series AAV9** Sample
+    -   **5X Dilution series AAV2 Internal Control** Sample (1.3e+7 - 6.03e+7 expected range based on 50-200% average TU/mL taken across 11 separate measurements)
+-   Controls:
+    -   **GFP+ / L/D+** Prepared from cells transduced w/ AAV2 Internal Control dilution 1 sample
+    -   **GFP- / L/D-** Prepared from untransduced cells
+    -   **GFP+ / L/D-** Prepared from cells transduced w/ AAV2 Internal Control dilution 1 sample
+    -   **GFP- / L/D+** Prepared from untransduced cells
+
+#### Note:
+
+Run 1 Operator 2 was excluded from the analysis due to a technical issue with the flow cytometer. This plate was subsequently repeated and labelled as Run 3 Operator 2.
+
+## Analysis:
+
+-   The analysis is performed in R using the `tidyverse` and `aqua` packages.
+
+## Parameters:
+
+-   **Accuracy:** N/A
+-   **Precision**
+    -   **Repeatability:** CV \< 40% between dilution series of a single plate (n=4)
+    -   **Intermediate Precision:** CV \< 50% between same dilutions across all plates (n=4, 1/plate). Data obtained by taking each plate's average TU/mL from the separate dilution series.
+-   **Specificity:** Using negative controls only, \< 3% GFP+.
+-   **Linearity:** R^2^ \> 0.9 for AAV9 dilution series. Using 1.6X dilution series.
+-   **LoD:** Lowest dilutional TU/mL where %GFP+ \> average negative control GFP+ + 3.3\*sd(negative control GFP+)
+-   **LoQ:** Lowest dilutional TU/mL where %GFP+ \> average negative control GFP+ + 10\*sd(negative control GFP+) and meets precision CV% criteria.
+-   **Robustness:** N/A
+
+:::{.callout-note}
+## Calculating TU/mL when the data is lognormal-ish
+
+We can use an MOI correction based on the poisson distribution. Instead of GFP+ we can use `-log(1 - GFP+)`. 
+:::
+
+
+```{r}
+#| label: read_data
+
+tu_data <- read_excel("data/EX2350, 2351, 2352, 2388 - TU AAV8 Quali Data Collation for Dragos (data re-formatted).xlsx") |>
+  mutate(
+    across(Run:Dilution, as.factor),
+    across(LiveCellsPerc:GFPpercent, ~ .x/100)
+  ) |> 
+  select(!c(`...13`, `...15`, `Operator 1:`, `Omaymah Belhaj-Fahsi`)) |> 
+  filter(!if_all(everything(), is.na))
+
+```
+
+
+# Qualification
+
+## Specificity
+
+Graph below (@fig-specificity-samples) shows the %GFP+ cells identified across all control samples, which include a full mix of GFP± and L/D± dyes.
+
+```{r}
+#| label: fig-specificity-samples
+#| dev: "ragg_png"
+#| fig-cap: "AAV9 TU assay negative controls."
+
+tu_data |>
+  filter(str_detect(Sample, "^GFP")) |>
+  mutate(row = row_number()) |>
+  ggplot(
+    aes(x = row, y = GFPpercent, colour = paste0("Run ", Run, " Op ", Operator), shape = str_replace(Sample, " ", "\n "))
+  ) +
+  theme_catapult() +
+  theme(legend.box = "vertical") +
+  scale_colour_catapult_d(end = 0.75) +
+  geom_point(size = 3) +
+  scale_y_continuous(limits  = c(0, 1), labels = scales::percent) +
+  guides(
+    shape = guide_legend(nrow = 1, override.aes = list(size = 5, linewidth = 2)),
+    colour = guide_legend(nrow = 1)
+  ) +
+  labs(
+    x = "Sample #",
+    y = "%GFP +",
+    colour = "Plate",
+    shape = "Control\nSample"
+  )
+
+```
+
+GFP+ samples derived from the 1:5 dilution of the control sample show strong positive signal when compared to GFP- samples. Factoring in the L/D+ signal introduces some extra variability for the GFP+ samples but doesn't affect the "noise" floor. Let's get an estimate of the noise floor and LoD/LLoQ.
+
+## LoD / LoQ
+
+```{r}
+#| label: tbl-lod-calculation
+#| tbl-cap: "AAV8 TU assay LoD/LLoQ Estimates. Noise threshold estimate based on GFP- L/D+ samples. LoD estimate at 3.3 SDs above noise, and LLoQ estimate at 10 SDs above noise threshold."
+
+LL_data <- tu_data |>
+  filter(Sample == "GFP- L/D+" | (Sample == "AAV8-GFP-1.6X" & Dilution == "1759")) |>
+  group_by(Run, Operator, Sample) |>
+  summarise(
+    Noise = mean(GFPpercent),
+    Var = var(GFPpercent)
+  ) |>
+  group_by(Sample) |>
+  summarise(
+    avg = mean(Noise),
+    uncertainty = sqrt(sum(Var))/4
+  )
+
+LL_data[1, 2] <- LL_data[2, 2] # swap average noise for neg control, but keeping uncertainty from lowest dilution sample
+
+LL_data[2, ] |> # plan says use blanks for all tho so f it we're not using the dilution uncertainty thing. Use LL_data[-2, ] to switch to uncertainty estimate from most dilute sample.
+  mutate(
+    Noise = paste0(scales::percent(avg, accuracy = 0.1), " ±", scales::percent(uncertainty, accuracy = 0.1)),
+    LOD = scales::percent(avg + 3.3 * uncertainty, accuracy = 0.1),
+    LOQ = scales::percent(avg + 10 * uncertainty, accuracy = 0.1),
+    .keep = "none"
+  ) |>
+  set_names(c("Noise Threshold Estimation", "LoD", "LLoQ")) |>
+  flextable() |>
+  theme_box() |>
+  autofit()
+
+# LLoQ is now 2.0 instead of 2.7% GFP+ cells. 
+
+```
+
+The LLoQ is about where it was estimated beforehand, at 2.0% (close to 3% estimate). The noise floor and LoD/LLoQ is estimated using the GFP- L/D+ samples and their associated variance.
+ 
+
+## Linearity
+
+```{r}
+#| label: fig-linearity
+#| dev: "ragg_png"
+#| fig-cap: "Linearity plot of all data. Robust linear model fit for data above LoQ %GFP+ cells shown as black trendline."
+
+tu_data |>
+  filter(
+    Sample == "AAV8-GFP-1.6X"
+  ) |>
+  ggplot(
+    aes(x = as.numeric(as.character(Dilution)), y = GFPpercent, colour = paste0("Run ", Run, " Op ", Operator))
+  ) + 
+  geom_smooth(data = ~ filter(.x, GFPpercent > 0.02), method = robustbase::lmrob, se = FALSE, colour = "darkred", linewidth = 2) +
+  geom_point(size = 3, alpha = 2/3) +
+#  scale_x_log10(breaks = c(5, 0.5, 0.31, 0.2, 0.12, 0.08, 0.05, 0.03, 0.02, 0.01)) +
+  scale_x_log10(breaks = c(10, 16, 26, 41, 66, 105, 168, 268, 429, 687, 1100, 1759)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  theme_catapult() +
+  scale_colour_catapult_d(end = 0.75) +
+  labs(
+    x = "Dilution Factor (log scale)",
+    y = "%GFP+ Cells",
+    colour = "Plate"
+  )
+
+```
+
+Potential linear range is between 1:100 - 1:1049 but let's check.
+
+
+```{r}
+#| label: tbl-linearity-table
+#| tbl-cap: "Linearity per dilution range."
+
+tu_data |>
+  filter(
+    Sample == "AAV8-GFP-1.6X"
+  ) |>
+  group_by(Run, Operator) |>
+  mutate(
+    Dilution = as.numeric(as.character(Dilution))
+  ) |>
+  nest() |>
+  mutate(
+    rsq_16_1759 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_1100 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 1759))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_687 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 1100, 1759))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_429 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_268  = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_168 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_105 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 168, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_66 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 105, 168, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("r.squared")),,
+    rsq_16_41 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution), data = filter(x, !Dilution %in% c(10, 66, 105, 168, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("r.squared"))
+  ) |>
+  mutate(
+    Plate = paste0("Run ", Run, " Op ", Operator)
+  ) |>
+  ungroup() |>
+  select(-Run, -Operator, -data) |>
+  relocate(Plate, .before = 1) |>
+  mutate(
+    across(where(is.numeric), ~ round(.x, 3))
+  ) |>
+  set_names(c("Plate", "1:16 - 1:1759", "1:16 - 1:1100", "1:16 - 1:687", "1:16 - 1:429", "1:16 - 1:268", "1:16 - 1:168", "1:16 - 1:105", "1:16 - 1:66", "1:16 - 1:41")) |>
+  pivot_longer(
+    cols = 2:last_col(),
+    names_to = "Range",
+    values_to = "R-squared"
+  ) |>
+  flextable() |>
+  theme_box() |>
+  merge_v(1) |>
+  bold(j = 1) |>
+  autofit()
+
+# N.B> Only one level for run, so that must be removed from the model
+  
+  
+tu_data |>
+  filter(
+    Sample == "AAV8-GFP-1.6X"
+  ) |>
+  mutate(
+    Dilution = as.numeric(as.character(Dilution))
+  ) |>
+  nest() |>
+  mutate(
+    rsq_16_1759 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10))) |> summary.lm() |> magrittr::extract2("r.squared")),
+    rsq_16_1100 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared")),
+    rsq_16_687 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 1100, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared")),
+    rsq_16_429 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared")),
+    rsq_16_268  = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared")),
+    rsq_16_168 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared")),
+    rsq_16_105 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 168, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared")),
+    rsq_16_66 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 105, 168, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared")),,
+    rsq_16_41 = map_dbl(data, \(x) lm(GFPpercent ~ log(Dilution) + Operator, data = filter(x, !Dilution %in% c(10, 66, 105, 168, 268, 429, 687, 1100, 1759))) |> summary.lm() |> magrittr::extract2("adj.r.squared"))
+  ) |> 
+  select(-data) |>
+  mutate(Plate = "Average adj. R-squared") |>
+  relocate(Plate, .before = 1) |>
+  mutate(
+    across(where(is.numeric), ~ round(.x, 3))
+  ) |>
+  set_names(c("Plate", "1:16 - 1:1759", "1:16 - 1:1100", "1:16 - 1:687", "1:16 - 1:429", "1:16 - 1:268", "1:16 - 1:168", "1:16 - 1:105", "1:16 - 1:66", "1:16 - 1:41")) |>
+  pivot_longer(
+    cols = 2:last_col(),
+    names_to = "Range",
+    values_to = "R-squared"
+  ) |>
+  flextable() |>
+  theme_box() |>
+  merge_v(1) |>
+  bold(j = 1) |>
+  autofit()
+```
+
+1:100 - 1:2684 dilution range passes the acceptance criteria.
+
+
+```{r}
+#| label: tbl-range-calc
+#| tbl-cap: "%GFP+ average estimate for each dilution step."
+
+WR_data <- tu_data |>
+  filter(Sample == "AAV8-GFP-1.6X") |>
+  group_by(Run, Operator, Dilution, Sample) |>
+  summarise(
+    Noise = mean(GFPpercent),
+    Var = var(GFPpercent)
+  ) |>
+  group_by(Dilution) |>
+  summarise(
+    avg = mean(Noise),
+    uncertainty = sqrt(sum(Var))/3
+  )
+
+WR_data |>
+  mutate(
+    Dilution = paste0("1:", Dilution),
+    `%GFP+` = paste0(scales::percent(avg, accuracy = 0.1), "  ±", scales::percent(uncertainty, accuracy = 0.1)),
+    .keep = "none"
+  ) |>
+  flextable() |>
+  bold(j = 1) |>
+  theme_box() |>
+  autofit()
+  
+```
+
+1:100 - 1:2684 corresponds to an average GFP+% of between 3.1% (±0.3) - 35.5% (±1.3) for the linear working range.
+
+## Precision
+
+We'll highlight the linear working range in the plots (3.1% - 35.5%).
+
+```{r}
+#| label: fig-precision-aav9
+#| dev: "ragg_png"
+#| fig-cap: "AAV8 TU assay repeatability. CVs in large yellow font, average GFP+ cells% above in white. Red highlights the 3.1-35.5% GFP+ cells samples (working range)."
+
+# Run 2 operator 1 getting NAs
+
+tu_data |>
+  filter(
+    Sample == "AAV8-GFP"
+  ) |>
+  group_by(Run, Operator, Dilution) |>
+  summarise(
+    CV = DescTools::CoefVar(TU_ml_adj),
+    GFP = mean(GFPpercent)
+  ) #|>
+  ggplot(
+    aes(x = Dilution, y = paste0("Run ", Run, " Op ", Operator), fill = CV)
+  ) + 
+  geom_tile() +
+  theme_catapult() +
+  theme(axis.title.y = element_blank()) +
+  scale_fill_catapult_c(option = "B", end = 0.8, breaks = c(0, 0.1, 0.2, 0.3, 0.4), labels = scales::percent, limits = c(0, 0.45), legend_width = 16) +
+  geom_label(aes(label = scales::percent(CV, accuracy = 0.1)), colour = "gold", fontface = "bold", size = 5) +
+  geom_label(aes(label = paste(scales::percent(GFP, accuracy = 0.1), " GFP+")), colour = "white", size = 3.5, position = position_nudge(x = 0, y = 0.3)) +
+  labs(
+    x = "Dilution",
+    y = "Run/Operator",
+    fill = "TU/mL CV (%)"
+  )
+
+```
+
+1:625 is the only sample that was consistently within the presumed working range of the assay. 
+
+```{r}
+#| label: tbl-intermediate-precision
+#| tbl-cap: "AAV8 TU assay intermediate precision."
+
+tu_data |>
+  filter(
+    Sample == "AAV8-GFP"
+  ) |>
+  group_by(Run, Operator, Dilution) |>
+  summarise(
+    TU = mean(TU_ml_adj)
+  ) |>
+  group_by(Dilution) |>
+  summarise(
+    CV = DescTools::CoefVar(TU) |> scales::percent(accuracy = 0.1)
+  ) |>
+  ungroup() |>
+  mutate(Dilution = paste0("1:", Dilution)) |>
+  set_names(c("Dilution", "CV (%)")) |>
+  flextable() |>
+  theme_box() |>
+  autofit() |>
+  bold(j = 1)
+
+```
+
+The only sample within working range completely had a 15.8% CV across the 4 plates. Most other samples except the 1:15625 one had acceptable CV as well.
+
+#### Control sample
+
+```{r}
+#| label: fig-precision-aav2
+#| dev: "ragg_png"
+#| fig-cap: "AAV2 TU assay precision plot (control)."
+
+tu_data |>
+  filter(
+    Sample == "AAV2-GFP Internal Control"
+  ) |>
+  group_by(Run, Operator, Dilution) |>
+  summarise(
+    CV = DescTools::CoefVar(TU_ml_adj),
+    GFP = mean(GFPpercent)
+  ) |>
+  ggplot(
+    aes(x = Dilution, y = paste0("Run ", Run, " Op ", Operator), fill = CV)
+  ) + 
+  geom_tile() +
+  theme_catapult() +
+  theme(axis.title.y = element_blank()) +
+  scale_fill_catapult_c(option = "B", end = 0.8, breaks = c(0, 0.1, 0.2, 0.3, 0.4), labels = scales::percent, limits = c(0, 0.45), legend_width = 16) +
+  geom_label(aes(label = scales::percent(CV, accuracy = 0.1)), colour = "gold", fontface = "bold", size = 5) +
+  geom_label(aes(label = paste(scales::percent(GFP, accuracy = 0.1), " GFP+")), colour = "white", size = 3.5, position = position_nudge(x = 0, y = 0.3)) +
+  labs(
+    x = "Dilution",
+    y = "Run/Operator",
+    fill = "TU/mL CV (%)"
+  )
+  
+
+```
+
+The 3.1 - 35.5% GFP+ range is consistent between the 1:25-1:125 dilutions across the 4 plates.
+
+#### Linearity sample
+
+This is FIO - just to check that the linearity was "OK".
+
+```{r}
+#| label: fig-precision-aav2-linsample
+#| dev: "ragg_png"
+#| fig-cap: "AAV8 TU assay precision plot (linearity sample)."
+#| fig-width: 10
+#| fig-height: 5
+
+tu_data |>
+  filter(
+    Sample == "AAV8-GFP-1.6X"
+  ) |>
+  group_by(Run, Operator, Dilution) |>
+  summarise(
+    CV = DescTools::CoefVar(TU_ml_adj),
+    GFP = mean(GFPpercent)
+  ) |>
+  ggplot(
+    aes(x = Dilution, y = paste0("Run ", Run, " Op ", Operator), fill = CV)
+  ) + 
+  geom_tile() +
+  theme_catapult() +
+  theme(axis.title.y = element_blank()) +
+  scale_fill_catapult_c(option = "B", end = 0.8, breaks = c(0, 0.1, 0.2, 0.3, 0.4), labels = scales::percent, limits = c(0, 0.45), legend_width = 16) +
+  geom_label(aes(label = scales::percent(CV, accuracy = 0.1)), colour = "gold", fontface = "bold", size = 5) +
+  geom_label(aes(label = scales::percent(GFP, accuracy = 0.1)), colour = "white", size = 3.5, position = position_nudge(x = 0, y = 0.3)) +
+  labs(
+    x = "Dilution",
+    y = "Run/Operator",
+    fill = "TU/mL CV (%)"
+  )
+
+```
+
+# Conclusions
+
+-   **Precision**
+    -   **Repeatability:** 3.4% - 13.5% CV for the samples within linear working range, although all dilutions pass the <40% CV criteria (1.1% - 29.2% CV).
+    -   **Intermediate Precision:** 15.8% CV for the 1:625 sample (10.1% - 14.4% GFP+ range), although all dilutions pass the <50% CV criteria (6.2% - 44.9% CV).
+-   **Specificity:** Noise floor at 0.7% (±0.1) GFP+, with strong positive signal in the positive controls.
+-   **Linearity:** 1:100 - 1:2684 (3.1% - 35.5% GFP+) 
+-   **LoD:** 1.1% GFP+ cells
+-   **LLoQ:** 2.0% GFP+ cells
+-   **ULoQ:** 35.5% GFP+ cells
+
+Assay passes qualification with a working linear range between 3.1% - 35.5% GFP+ cells, LLoQ of 2% GFP+ cells, LoD of 1.1% GFP+ cells, 3.3% - 13.5% CV repeatability and 15.8% intermediate precision within the working range.
