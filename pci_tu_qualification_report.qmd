@@ -58,20 +58,17 @@ knitr::opts_chunk$set(
 
 # PCI AAV8 TU Assay Qualification
 
-This repo contains the qualification analysis for the PCI AAV8 TU assay. The assay quantifies infectivity of AAV8 on *HeLaRC32* cells. Reporter gene expression is measured using flow cytometry (as %GFP+ cells) and used to calculate TU/mL.
+This document describes the qualification of the AAV8 TU assay. The AAV8 TU assay is a cell-based assay that measures the transducing units (TU) of AAV8 vectors in HeLa cells.
 
-## Setup:
+Parameters assessed:
 
--   2 runs, 2 plates per run
--   Each run has:
-    -   **5X Dilution series AAV8** Sample
-    -   **1.6X Dilution series AAV8** Sample
-    -   **5X Dilution series AAV2 Internal Control** Sample (1.3e+7 - 6.03e+7 expected range based on 50-200% average TU/mL taken across 11 separate measurements)
--   Controls:
-    -   **GFP+ / L/D+** Prepared from cells transduced w/ AAV2 Internal Control dilution 1 sample
-    -   **GFP- / L/D-** Prepared from untransduced cells
-    -   **GFP+ / L/D-** Prepared from cells transduced w/ AAV2 Internal Control dilution 1 sample
-    -   **GFP- / L/D+** Prepared from untransduced cells
+- Specificity: 50-200% recovery of spiked sample, -ve ctrl < LoD
+- Accuracy (relative to TU dev runs): 50-200% (**FIO**)
+- Precision (CV):
+  - Repeatability <= 40%
+  - Intermediate Precision <= 50%
+- Linearity (R^2): >= 0.9
+- LOQ/LLOD
 
 #### Note:
 
@@ -83,7 +80,7 @@ Run was excluded as a term for the adjusted R2 analysis, as it was invariable ac
 
 ## Parameters:
 
--   **Accuracy:** N/A
+-   **Accuracy:** Relative recovery rate within 50-200%. Mean sample TU/mL within 50-200% recovery of mean sample TU/mL from previous TU development runs.
 -   **Precision**
     -   **Repeatability:** CV \< 40% between dilution series of a single plate (n=4)
     -   **Intermediate Precision:** CV \< 50% between same dilutions across all plates (n=4, 1/plate). Data obtained by taking each plate's average TU/mL from the separate dilution series.
@@ -116,6 +113,53 @@ tu_data <- read_excel("data/EX2350, 2351, 2352, 2388 - TU AAV8 Quali Data Collat
 
 
 # Qualification
+
+## Accuracy
+
+The accuracy of an analytical procedure expresses the closeness of agreement between the value which is accepted either as a conventional true value or as an accepted reference value and the value measured.
+
+* AAV8-GFP TFF2 sample: expected ~ 1.38e7 TU/mL
+
+```{r}
+#| label: tbl-accuracy-elisa
+#| tbl-cap: "Accuracy for each dilution"
+
+tu_data |>
+  filter(str_detect(Sample, "AAV8-GFP spiked in TFF2 buffer")) |>
+  select(Sample, Dilution, TU_ml_adj) |>
+  group_by(Sample, Dilution) |>
+  summarise(
+    mean = scales::percent(mean(TU_ml_adj) / 1.38e+7)
+  ) |>
+  set_names(c("Sample", "Dilution Factor", "Recovery vs. known sample titre")) |>
+  flextable() |>
+  merge_v(j = 1) |>
+  theme_box() |>
+  autofit() |>
+  align(align = "center", part = "all")
+
+all_acc <- scales::percent(tu_data |>
+  filter(str_detect(Sample, "AAV8-GFP spiked in TFF2 buffer")) |>
+  select(Sample, Dilution, TU_ml_adj) |>
+  group_by(Sample, Dilution) |>
+  summarise(
+    mean = mean(TU_ml_adj) / 1.38e+7
+  ) |>
+  pull(mean) |>
+  mean())
+
+spec_acc <- scales::percent(tu_data |>
+  filter(str_detect(Sample, "AAV8-GFP spiked in TFF2 buffer"), Dilution != 625) |>
+  select(Sample, Dilution, TU_ml_adj) |>
+  group_by(Sample, Dilution) |>
+  summarise(
+    mean = mean(TU_ml_adj) / 1.38e+7
+  ) |>
+  pull(mean) |>
+  mean())
+```
+
+The overall accuracy/recovery is `r all_acc`. Excluding the 1:625 dilution it is `r spec_acc`.
 
 ## Specificity
 
@@ -486,6 +530,7 @@ tu_data |>
 # Conclusions
 
 -   **Precision**
+    -   **Accuracy:** Average accuracy (`r all_acc`) is within acceptable range (50-200% recovery).
     -   **Repeatability:** All dilutions pass the <40% CV criteria.
     -   **Intermediate Precision:** 25% CV for the 1:25 sample and 15.1% CV for 1:125 sample, although all dilutions pass the <50% CV criteria.
 -   **Specificity:** Noise floor at 0.4% (±0.1) GFP+, with strong positive signal in the positive controls.
